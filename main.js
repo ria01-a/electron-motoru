@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 
-// Render'ın proxy arkasındaki sağlık kontrollerini ve el sıkışmalarını 200 OK ile yanıtlayan kararlı HTTP yapısı
+// Render proxy'lerini aşmak ve istekleri boşa düşürmemek için kararlı http handler
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 
     'Content-Type': 'text/plain', 
@@ -15,7 +15,6 @@ const server = http.createServer((req, res) => {
 const { Server } = require('socket.io'); 
 const bcrypt = require('bcryptjs'); 
 
-// Render.com mimarisinde WebSockets el sıkışmasının 404 yememesi için konfigürasyon
 const io = new Server(server, {
   cors: { 
     origin: "*", 
@@ -23,9 +22,7 @@ const io = new Server(server, {
     credentials: true
   },
   allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  transports: ['websocket', 'polling'] // Tarayıcının gönderdiği iki tüneli de eşler
+  transports: ['websocket', 'polling']
 });
 
 const isRender = process.env.RENDER === 'true';
@@ -36,7 +33,6 @@ let app;
 
 if (isRender) {
   dbPath = path.join(__dirname, 'discord_db.json');
-  console.log("Sunucu modu aktif: Electron pas geçildi.");
 } else {
   try {
     const electronModule = require('electron');
@@ -52,17 +48,19 @@ let activeVoiceUsers = {};
 let activeOnlineUsers = {}; 
 
 function initDatabase() {
-  if (!fs.existsSync(dbPath)) {
-    const defaultData = {
-      users: [], 
-      textChannels: ['genel', 'kod-paylasim', 'muhabbet'],
-      voiceChannels: ['Genel Ses Odası', 'Gaming / LoL', 'Kahve & Muhabbet'],
-      messages: {
-        genel: [{ id: 1, user: 'Sistem', avatar: 'https://cdn.discordapp.com/embed/avatars/0.png', text: 'Profil fotoğrafı destekli sunucumuz hazır! 🖼️', time: 'Şimdi', color: 'bg-gray-600' }]
-      }
-    };
-    fs.writeFileSync(dbPath, JSON.stringify(defaultData, null, 2));
-  }
+  try {
+    if (!fs.existsSync(dbPath)) {
+      const defaultData = {
+        users: [], 
+        textChannels: ['genel', 'kod-paylasim', 'muhabbet'],
+        voiceChannels: ['Genel Ses Odası', 'Gaming / LoL', 'Kahve & Muhabbet'],
+        messages: {
+          genel: [{ id: 1, user: 'Sistem', avatar: 'https://cdn.discordapp.com/embed/avatars/0.png', text: 'Profil fotoğrafı destekli sunucumuz hazır! 🖼️', time: 'Şimdi', color: 'bg-gray-600' }]
+        }
+      };
+      fs.writeFileSync(dbPath, JSON.stringify(defaultData, null, 2));
+    }
+  } catch (e) { console.error("DB Init Hatası:", e); }
 }
 
 initDatabase();
@@ -89,7 +87,7 @@ io.on('connection', (socket) => {
       fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
       socket.emit('register-response', { success: true, message: 'Başarıyla kayıt olundu! Şimdi giriş yapabilirsiniz.' });
     } catch (err) {
-      socket.emit('register-response', { success: false, message: 'Kayıt sırasında hata.' });
+      socket.emit('register-response', { success: false, message: 'Kayıt sırasında hata oluştu.' });
     }
   });
 
@@ -114,7 +112,29 @@ io.on('connection', (socket) => {
       });
       io.emit('update-online-users', Object.values(activeOnlineUsers));
     } catch (err) {
-      socket.emit('login-response', { success: false, message: 'Giriş hatası.' });
+      socket.emit('login-response', { success: false, message: 'Giriş sırasında hata oluştu.' });
+    }
+  });
+
+  socket.on('update-profile-avatar', (data) => {
+    try {
+      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+      const userIndex = db.users.findIndex(u => u.username.toLowerCase() === data.username.toLowerCase());
+      if (userIndex !== -1) {
+        db.users[userIndex].avatar = data.avatar;
+        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+        
+        if (activeOnlineUsers[socket.id]) {
+          activeOnlineUsers[socket.id].avatar = data.avatar;
+        }
+        
+        socket.emit('profile-updated', { success: true, avatar: data.avatar });
+        io.emit('update-online-users', Object.values(activeOnlineUsers));
+      } else {
+        socket.emit('profile-updated', { success: false, message: 'Kullanıcı bulunamadı.' });
+      }
+    } catch (err) {
+      socket.emit('profile-updated', { success: false, message: 'Profil güncellenirken sunucu hatası.' });
     }
   });
 
@@ -128,102 +148,10 @@ io.on('connection', (socket) => {
     } catch (err) { console.error(err); }
   });
 
-  socket.on('delete-message', (data) => {
-    try {
-      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-      if (db.messages[data.channel]) {
-        db.messages[data.channel] = db.messages[data.channel].filter(msg => msg.id !== data.messageId);
-        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-        io.emit('receive-global-channel', db);
-      }
-    } catch (err) { console.error(err); }
-  });
-
-  socket.on('edit-message', (data) => {
-    try {
-      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-      if (db.messages[data.channel]) {
-        const msgIndex = db.messages[data.channel].findIndex(msg => msg.id === data.messageId);
-        if (msgIndex !== -1) {
-          db.messages[data.channel][msgIndex].text = data.newText;
-          db.messages[data.channel][msgIndex].isEdited = true;
-          fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-          io.emit('receive-global-channel', db);
-        }
-      }
-    } catch (err) { console.error(err); }
-  });
-
-  socket.on('create-global-channel', (data) => {
-    try {
-      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-      if (data.type === 'text' && !db.textChannels.includes(data.name)) {
-        db.textChannels.push(data.name);
-        db.messages[data.name] = [];
-      } else if (data.type === 'voice' && !db.voiceChannels.includes(data.name)) {
-        db.voiceChannels.push(data.name);
-      }
-      fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-      io.emit('receive-global-channel', db);
-    } catch (err) { console.error(err); }
-  });
-
-  socket.on('join-voice-network', (data) => {
-    Object.keys(activeVoiceUsers).forEach(room => {
-      activeVoiceUsers[room] = activeVoiceUsers[room].filter(u => u.name !== data.user);
-    });
-
-    socket.join(data.room);
-    if (!activeVoiceUsers[data.room]) activeVoiceUsers[data.room] = [];
-    
-    activeVoiceUsers[data.room].push({
-        name: data.user,
-        socketId: socket.id,
-        avatar: data.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png'
-    });
-    
-    socket.currentVoiceUser = data.user;
-    socket.currentVoiceRoom = data.room;
-    
-    socket.to(data.room).emit('user-connected', { socketId: socket.id, user: data.user });
-    io.emit('update-voice-users', activeVoiceUsers);
-  });
-
-  socket.on('webrtc-offer', (data) => {
-    io.to(data.targetId).emit('webrtc-offer', { senderId: socket.id, offer: data.offer });
-  });
-
-  socket.on('webrtc-answer', (data) => {
-    io.to(data.targetId).emit('webrtc-answer', { senderId: socket.id, answer: data.answer });
-  });
-
-  socket.on('webrtc-candidate', (data) => {
-    io.to(data.targetId).emit('webrtc-candidate', { senderId: socket.id, candidate: data.candidate });
-  });
-
-  socket.on('leave-voice-network', (data) => {
-    if (activeVoiceUsers[data.room]) {
-      activeVoiceUsers[data.room] = activeVoiceUsers[data.room].filter(u => u.name !== data.user);
-    }
-    socket.to(data.room).emit('user-left-voice', { socketId: socket.id });
-    socket.leave(data.room);
-    io.emit('update-voice-users', activeVoiceUsers);
-  });
-
   socket.on('disconnect', () => {
     if (activeOnlineUsers[socket.id]) {
       delete activeOnlineUsers[socket.id];
       io.emit('update-online-users', Object.values(activeOnlineUsers)); 
-    }
-    if (socket.currentVoiceUser) {
-      Object.keys(activeVoiceUsers).forEach(room => {
-        activeVoiceUsers[room] = activeVoiceUsers[room].filter(u => u.name !== socket.currentVoiceUser);
-      });
-      if (socket.currentVoiceRoom) {
-        socket.to(socket.currentVoiceRoom).emit('user-left-voice', { socketId: socket.id });
-        socket.leave(socket.currentVoiceRoom);
-      }
-      io.emit('update-voice-users', activeVoiceUsers);
     }
   });
 });
