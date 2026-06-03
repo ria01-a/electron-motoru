@@ -153,6 +153,58 @@ io.on('connection', (socket) => {
     }
   });
 
+  // --- MESAJ SİLME SİSTEMİ (DÜZELTİLDİ) ---
+  socket.on('delete-message', (data) => {
+    try {
+      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+      const channelName = data.channel;
+      const messageId = data.messageId;
+
+      if (db.messages && db.messages[channelName]) {
+        // Mesajı filtreleyerek listeden siliyoruz
+        db.messages[channelName] = db.messages[channelName].filter(msg => msg.id !== messageId);
+        
+        // Güncel veriyi dosyaya kaydediyoruz
+        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+
+        // CRITICAL FIX: Güncellenmiş tüm veritabanını odadaki herkese fırlatıyoruz!
+        // Böylece frontend'deki 'receive-global-channel' bunu yakalayıp ekranı anında güncelleyecek.
+        io.emit('receive-global-channel', db);
+      }
+    } catch (err) {
+      console.error("Mesaj silinirken hata oluştu:", err);
+    }
+  });
+
+  // --- MESAJ DÜZENLEME SİSTEMİ (DÜZELTİLDİ) ---
+  socket.on('edit-message', (data) => {
+    try {
+      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+      const channelName = data.channel;
+      const messageId = data.messageId;
+      const newText = data.newText;
+
+      if (db.messages && db.messages[channelName]) {
+        // İlgili mesajı buluyoruz
+        const msgIndex = db.messages[channelName].findIndex(msg => msg.id === messageId);
+        
+        if (msgIndex !== -1) {
+          // Mesajın içeriğini değiştirip düzenlendi bayrağını true yapıyoruz
+          db.messages[channelName][msgIndex].text = newText;
+          db.messages[channelName][msgIndex].isEdited = true;
+          
+          // Güncel veriyi dosyaya kaydediyoruz
+          fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+
+          // CRITICAL FIX: Güncellenmiş tüm veritabanını odadaki herkese fırlatıyoruz!
+          io.emit('receive-global-channel', db);
+        }
+      }
+    } catch (err) {
+      console.error("Mesaj düzenlenirken hata oluştu:", err);
+    }
+  });
+
   // CANLI MESAJLAŞMA
   socket.on('send-global-message', (data) => {
     try {
