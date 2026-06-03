@@ -127,6 +127,32 @@ io.on('connection', (socket) => {
     }
   });
 
+  // --- PROFİL FOTOĞRAFI GÜNCELLEME SİSTEMİ (YENİ) ---
+  socket.on('update-profile-avatar', (data) => {
+    try {
+      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+      const userIndex = db.users.findIndex(u => u.username.toLowerCase() === data.username.toLowerCase());
+      
+      if (userIndex !== -1) {
+        // Veritabanındaki avatarı güncelle
+        db.users[userIndex].avatar = data.newAvatar;
+        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+        
+        // Kullanıcıya başarılı yanıtı dön
+        socket.emit('avatar-update-response', { success: true, newAvatar: data.newAvatar });
+        
+        // Eğer kullanıcı o sırada aktif çevrimiçiyse, çevrimiçi listesini de güncelle
+        if (activeOnlineUsers[socket.id]) {
+          activeOnlineUsers[socket.id].avatar = data.newAvatar;
+          io.emit('update-online-users', Object.values(activeOnlineUsers));
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      socket.emit('avatar-update-response', { success: false, message: 'Profil resmi güncellenemedi.' });
+    }
+  });
+
   // CANLI MESAJLAŞMA
   socket.on('send-global-message', (data) => {
     try {
