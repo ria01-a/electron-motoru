@@ -2,7 +2,15 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 
-const server = http.createServer();
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 
+    'Content-Type': 'text/plain', 
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST'
+  });
+  res.end('Ria Discord Server Is Running');
+});
+
 const { Server } = require('socket.io'); 
 const bcrypt = require('bcryptjs'); 
 
@@ -12,7 +20,7 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true
   },
-  transports: ['websocket']
+  transports: ['websocket', 'polling']
 });
 
 const isRender = process.env.RENDER === 'true';
@@ -121,7 +129,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // --- 3. CANLI MESAJLAŞMA SİSTEMİ (Orijinal Yapın - Dokunulmadı) ---
+  // --- 3. CANLI MESAJLAŞMA SİSTEMİ ---
   socket.on('send-global-message', (data) => {
     try {
       const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
@@ -186,7 +194,7 @@ io.on('connection', (socket) => {
     } catch (err) { console.error(err); }
   });
 
-  // --- [YENİ] 7B. KANAL SİLME SİSTEMİ (SAĞ TIK İÇİN) ---
+  // --- 7B. KANAL SİLME SİSTEMİ ---
   socket.on('delete-global-channel', (data) => {
     try {
       const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
@@ -206,7 +214,7 @@ io.on('connection', (socket) => {
     } catch (err) { console.error(err); }
   });
 
-  // --- [YENİ] 7C. KANAL DÜZENLEME SİSTEMİ (SAĞ TIK İÇİN) ---
+  // --- 7C. KANAL DÜZENLEME SİSTEMİ ---
   socket.on('rename-global-channel', (data) => {
     try {
       const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
