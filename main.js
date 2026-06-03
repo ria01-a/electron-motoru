@@ -171,20 +171,30 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Normal ve Dosya Mesajı Gönderme Altyapısı
-  socket.on('send-global-message', ({ channel, message }) => {
-    if (!dbData.messages[channel]) dbData.messages[channel] = [];
-    dbData.messages[channel].push(message);
-    io.emit('receive-global-message', { channel, message });
-  });
+// Sunucudaki mesaj gönderme eventlerini bununla güncelle:
+socket.on('send-global-message', ({ channel, message }) => {
+  if (!dbData.messages[channel]) dbData.messages[channel] = [];
+  
+  // EĞER AVATAR GELMEDIYSE VARSAYILAN KORUMA
+  if (!message.avatar) {
+    message.avatar = "https://cdn.discordapp.com/embed/avatars/1.png";
+  }
+  
+  dbData.messages[channel].push(message);
+  io.emit('receive-global-message', { channel, message });
+});
 
-  socket.on('send-file-message', ({ channel, message }) => {
-    if (!dbData.messages[channel]) dbData.messages[channel] = [];
-    dbData.messages[channel].push(message);
-    io.emit('receive-global-message', { channel, message });
-  });
-
-
+socket.on('send-file-message', ({ channel, message }) => {
+  if (!dbData.messages[channel]) dbData.messages[channel] = [];
+  
+  // EĞER AVATAR GELMEDIYSE VARSAYILAN KORUMA
+  if (!message.avatar) {
+    message.avatar = "https://cdn.discordapp.com/embed/avatars/1.png";
+  }
+  
+  dbData.messages[channel].push(message);
+  io.emit('receive-global-message', { channel, message });
+});
   // =========================================================================
   // 2. KANAL YÖNETİMİ (OLUŞTURMA, SİLME, İSİM DEĞİŞTİRME)
   // =========================================================================
