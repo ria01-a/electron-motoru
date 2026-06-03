@@ -163,11 +163,18 @@ io.on('connection', (socket) => {
   // --- 6. DOSYA / FOTOĞRAF GÖNDERME SİSTEMİ ---
   socket.on('send-file-message', (data) => {
     try {
-      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-      if (!db.messages[data.channel]) db.messages[data.channel] = [];
-      db.messages[data.channel].push(data.message);
-      fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-      io.emit('receive-global-message', { channel: data.channel, message: data.message });
+      // 1. Base64 verisini al
+      const base64Data = data.message.fileData.base64;
+      const fileName = `${Date.now()}_${data.message.fileData.name}`;
+      
+      // 2. Sunucuda 'uploads' klasörüne kaydet (Node fs modülü ile)
+      const buffer = Buffer.from(base64Data.split(',')[1], 'base64');
+      fs.writeFileSync(path.join(__dirname, 'uploads', fileName), buffer);
+      
+      // 3. Mesajın içindeki base64 verisini sil, yerine URL/dosya adını koy
+      data.message.fileData.base64 = `/uploads/${fileName}`; 
+      
+      // ... veritabanına kaydet ve io.emit ile gönder
     } catch (err) { console.error(err); }
   });
 
