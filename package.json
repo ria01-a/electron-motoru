@@ -1,0 +1,25 @@
+{
+  "name": "electron-motoru",
+  "version": "1.0.0",
+  "description": "Ria Discord Masaustu Uygulamasi",
+  "author": "Ria",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.ria.motorcord",
+    "productName": "MotorCord",
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
