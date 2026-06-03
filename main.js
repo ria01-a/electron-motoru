@@ -2,15 +2,20 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 
-// Render'da isteklerin 404 yememesi için ham bir HTTP sunucusu yanıtı hazırlıyoruz
+// Render'ın proxy arkasındaki sağlık kontrollerini ve el sıkışmalarını 200 OK ile yanıtlayan kararlı HTTP yapısı
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
+  res.writeHead(200, { 
+    'Content-Type': 'text/plain', 
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST'
+  });
   res.end('Ria Discord Server Is Running');
 });
 
 const { Server } = require('socket.io'); 
 const bcrypt = require('bcryptjs'); 
 
+// Render.com mimarisinde WebSockets el sıkışmasının 404 yememesi için konfigürasyon
 const io = new Server(server, {
   cors: { 
     origin: "*", 
@@ -18,7 +23,9 @@ const io = new Server(server, {
     credentials: true
   },
   allowEIO3: true,
-  transports: ['websocket', 'polling'] // Render'ın kararlı el sıkışması için ikisi de şart
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling'] // Tarayıcının gönderdiği iki tüneli de eşler
 });
 
 const isRender = process.env.RENDER === 'true';
