@@ -33,6 +33,7 @@ if (isRender) {
 
 let activeVoiceUsers = {};
 let activeOnlineUsers = {}; 
+let activeVoiceRooms = {};
 
 function initDatabase() {
   if (!fs.existsSync(dbPath)) {
@@ -151,6 +152,78 @@ io.on('connection', (socket) => {
       console.error(err);
       socket.emit('avatar-update-response', { success: false, message: 'Profil resmi güncellenemedi.' });
     }
+  });
+
+  // --- WEBRTC SES ODASI SİSTEMİ ---
+  
+  // Bir kullanıcı ses odasına katıldığında
+  socket.on('join-voice-network', (data) => {
+    const roomName = data.room;
+    const username = data.user;
+    const avatar = data.avatar;
+
+    socket.join(roomName);
+
+    // Aktif ses odaları listesini sunucu hafızasında tutalım/güncelleyelim
+    if (!activeVoiceRooms[roomName]) {
+      activeVoiceRooms[roomName] = [];
+    }
+    
+    // Eğer kullanıcı zaten odada kayıtlıysa mükerrer olmasın diye temizleyelim
+    activeVoiceRooms[roomName] = activeVoiceRooms[roomName].filter(u => u.socketId !== socket.id);
+    
+    // Kullanıcıyı odaya ekle
+    activeVoiceRooms[roomName].push({
+      socketId: socket.id,
+      name: username,
+      avatar: avatar
+    });
+
+    // Odadaki herkese güncel kullanıcı listesini fırlat
+    io.emit('update-voice-users', activeVoiceRooms);
+
+    // Odadaki diğer kullanıcılara "yeni biri bağlandı, WebRTC bağlantısını başlatın" sinyali gönder
+    socket.to(roomName).emit('user-connected', {
+      socketId: socket.id,
+      user: username
+    });
+  });
+
+  // WebRTC Teklifi (Offer) Aktarıcı köprü
+  socket.on('webrtc-offer', (data) => {
+    io.to(data.targetId).emit('webrtc-offer', {
+      senderId: socket.id,
+      offer: data.offer
+    });
+  });
+
+  // WebRTC Cevabı (Answer) Aktarıcı köprü
+  socket.on('webrtc-answer', (data) => {
+    io.to(data.targetId).emit('webrtc-answer', {
+      senderId: socket.id,
+      answer: data.answer
+    });
+  });
+
+  // WebRTC Adayı (ICE Candidate) Aktarıcı köprü
+  socket.on('webrtc-candidate', (data) => {
+    io.to(data.targetId).emit('webrtc-candidate', {
+      senderId: socket.id,
+      candidate: data.candidate
+    });
+  });
+
+  // Kullanıcı "Odadan Çık" butonuna bastığında
+  socket.on('leave-voice-network', (data) => {
+    const roomName = data.room;
+
+    if (activeVoiceRooms[roomName]) {
+      activeVoiceRooms[roomName] = activeVoiceRooms[roomName].filter(u => u.socketId !== socket.id);
+      io.emit('update-voice-users', activeVoiceRooms);
+    }
+
+    socket.leave(roomName);
+    socket.to(roomName).emit('user-left-voice', { socketId: socket.id });
   });
 
   // --- MESAJ SİLME SİSTEMİ (DÜZELTİLDİ) ---
