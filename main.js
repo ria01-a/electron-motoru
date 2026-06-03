@@ -1,5 +1,7 @@
 const path = require('path');
 const fs = require('fs');
+const http = require('http'); // CRITICAL FIX: Bu satırın kesinlikle burada olması gerekiyor!
+
 // Express kullanmıyorsak bile gelen ham istekleri 200 OK ile yanıtlayacak kararlı bir HTTP sunucusu kuruyoruz
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -15,12 +17,12 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true
   },
-  allowEIO3: true, // Eski protokol uyumluluğu için (bağlantı hatalarını önler)
-  transports: ['websocket', 'polling'] // Render'ın bazen websocket'i geç başlatmasına karşın polling desteği de veriyoruz
+  allowEIO3: true, // Eski protokol uyumluluğu için
+  transports: ['websocket', 'polling'] // Hem websocket hem polling desteği
 });
 
-// Render sunucusunda mıyız yoksa lokal bilgisayarda mı kontrolü
-const isRender = process.env.RENDER === 'true' || !process.versions.electron;
+const isRender = process.env.RENDER === 'true';
+// ... Kodunun geri kalan kısmı (dbPath, activeVoiceUsers vb.) aynen devam edecek ...
 
 // Veritabanı yolunu sunucuya veya lokale göre esnetiyoruz
 let dbPath;
