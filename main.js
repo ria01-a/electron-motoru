@@ -1,7 +1,10 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)){
+    fs.mkdirSync(uploadDir);
+}
 const server = http.createServer();
 const { Server } = require('socket.io'); 
 const bcrypt = require('bcryptjs'); 
@@ -163,18 +166,25 @@ io.on('connection', (socket) => {
   // --- 6. DOSYA / FOTOĞRAF GÖNDERME SİSTEMİ ---
   socket.on('send-file-message', (data) => {
     try {
-      // 1. Base64 verisini al
-      const base64Data = data.message.fileData.base64;
-      const fileName = `${Date.now()}_${data.message.fileData.name}`;
+      const file = data.message.fileData;
+      if (file && file.base64) {
+        const fileName = `${Date.now()}_${file.name}`;
+        const filePath = path.join(uploadDir, fileName);
+        
+        // Base64 verisinden başlığı ayırıp dosyayı yazıyoruz
+        const base64Data = file.base64.replace(/^data:image\/\w+;base64,/, "");
+        fs.writeFileSync(filePath, base64Data, 'base64');
+        
+        // Mesajı güncelle: Artık base64 yerine dosya yolunu tutuyoruz
+        data.message.fileData.base64 = `/uploads/${fileName}`;
+      }
+
+      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+      if (!db.messages[data.channel]) db.messages[data.channel] = [];
+      db.messages[data.channel].push(data.message);
+      fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
       
-      // 2. Sunucuda 'uploads' klasörüne kaydet (Node fs modülü ile)
-      const buffer = Buffer.from(base64Data.split(',')[1], 'base64');
-      fs.writeFileSync(path.join(__dirname, 'uploads', fileName), buffer);
-      
-      // 3. Mesajın içindeki base64 verisini sil, yerine URL/dosya adını koy
-      data.message.fileData.base64 = `/uploads/${fileName}`; 
-      
-      // ... veritabanına kaydet ve io.emit ile gönder
+      io.emit('receive-global-message', data);
     } catch (err) { console.error(err); }
   });
 
@@ -291,6 +301,11 @@ io.on('connection', (socket) => {
     }
   });
 });
+
+const express = require('express'); // Express yüklü değilse: npm install express
+const appExpress = express();
+appExpress.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Eğer http.createServer kullanıyorsanız, express'i ona bağlamanız gerekir.
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => { console.log(`Sunucu ${PORT} portunda başarıyla dinleniyor...`); });
