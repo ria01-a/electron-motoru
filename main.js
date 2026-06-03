@@ -1,22 +1,22 @@
 const path = require('path');
 const fs = require('fs');
-const http = require('http');
+// Express kullanmıyorsak bile gelen ham istekleri 200 OK ile yanıtlayacak kararlı bir HTTP sunucusu kuruyoruz
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Ria Discord Server Is Running');
+});
+
 const { Server } = require('socket.io'); 
 const bcrypt = require('bcryptjs'); 
 
-// Tarayıcıdan doğrudan girildiğinde 502 vermemesi için basit bir HTML yanıtı ekliyoruz
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end('<h1>FakeCord Backend Sunucusu Aktif!</h1><p>Lütfen bu adrese tarayıcıdan değil, Electron uygulaması (.exe) üzerinden bağlanın.</p>');
-});
-
 const io = new Server(server, {
   cors: { 
-    origin: "*", 
+    origin: "*", // Tüm kökenlerden gelen isteklere izin veriyoruz
     methods: ["GET", "POST"],
     credentials: true
   },
-  transports: ['websocket']
+  allowEIO3: true, // Eski protokol uyumluluğu için (bağlantı hatalarını önler)
+  transports: ['websocket', 'polling'] // Render'ın bazen websocket'i geç başlatmasına karşın polling desteği de veriyoruz
 });
 
 // Render sunucusunda mıyız yoksa lokal bilgisayarda mı kontrolü
