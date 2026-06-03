@@ -1,8 +1,10 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const { Server } = require('socket.io'); 
+const bcrypt = require('bcryptjs'); 
 
-// Render proxy'lerini aşmak ve istekleri boşa düşürmemek için kararlı http handler
+// 1. HTTP Server Altyapısı (Render proxy'leri ve stabilite için tek bir instance)
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 
     'Content-Type': 'text/plain', 
@@ -12,9 +14,7 @@ const server = http.createServer((req, res) => {
   res.end('Ria Discord Server Is Running');
 });
 
-const { Server } = require('socket.io'); 
-const bcrypt = require('bcryptjs'); 
-
+// 2. Socket.io Altyapısı
 const io = new Server(server, {
   cors: { 
     origin: "*", 
@@ -31,6 +31,7 @@ let dbPath;
 let BrowserWindow;
 let app;
 
+// 3. Ortama Göre Veri Tabanı (JSON) Yolunun Belirlenmesi
 if (isRender) {
   dbPath = path.join(__dirname, 'discord_db.json');
 } else {
@@ -44,9 +45,11 @@ if (isRender) {
   }
 }
 
-let activeVoiceUsers = {};
-let activeOnlineUsers = {}; 
+// 4. Aktif Oturum Durumları (Runtime State)
+let activeVoiceUsers = {}; // Örn: { "Odalar": [ { socketId, name, avatar } ] }
+let activeOnlineUsers = {}; // Örn: { socketId: { username, color, avatar } }
 
+// 5. Veri Tabanı Başlatıcı (Init Database)
 function initDatabase() {
   try {
     if (!fs.existsSync(dbPath)) {
@@ -55,22 +58,43 @@ function initDatabase() {
         textChannels: ['genel', 'kod-paylasim', 'muhabbet'],
         voiceChannels: ['Genel Ses Odası', 'Gaming / LoL', 'Kahve & Muhabbet'],
         messages: {
-          genel: [{ id: 1, user: 'Sistem', avatar: 'https://cdn.discordapp.com/embed/avatars/0.png', text: 'Profil fotoğrafı destekli sunucumuz hazır! 🖼️', time: 'Şimdi', color: 'bg-gray-600' }]
+          genel: [{ id: 1, user: 'Sistem', avatar: 'https://cdn.discordapp.com/embed/avatars/0.png', text: 'Profil fotoğrafı destekli sunucumuz hazır! 🖼️', time: 'Şimdi', color: 'bg-gray-600', isEdited: false }]
         }
       };
       fs.writeFileSync(dbPath, JSON.stringify(defaultData, null, 2));
     }
-  } catch (e) { console.error("DB Init Hatası:", e); }
+  } catch (e) { 
+    console.error("DB Init Hatası:", e); 
+  }
 }
-
 initDatabase();
 
-io.on('connection', (socket) => {
-  console.log('Bir istemci bağlandı ID:', socket.id);
+// Yardımcı Fonksiyonlar: JSON Okuma ve Yazma
+function readDB() {
+  try {
+    return JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+  } catch (e) {
+    console.error("DB Okuma Hatası:", e);
+    return { users: [], textChannels: [], voiceChannels: [], messages: {} };
+  }
+}
 
+function writeDB(data) {
+  try {
+    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error("DB Yazma Hatası:", e);
+  }
+}
+
+// 6. SOCKET.IO SİSTEMİ (Tek Bir Çatı Altında Birleştirildi)
+io.on('connection', (socket) => {
+  console.log('🔌 Bir istemci bağlandı ID:', socket.id);
+
+  // --- KULLANICI KAYIT OLMA (REGISTER) ---
   socket.on('register-user', async (data) => {
     try {
-      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+      const db = readDB();
       const userExists = db.users.find(u => u.username.toLowerCase() === data.username.toLowerCase());
       if (userExists) {
         socket.emit('register-response', { success: false, message: 'Bu kullanıcı adı zaten alınmış!' });
@@ -78,245 +102,270 @@ io.on('connection', (socket) => {
       }
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(data.password, salt);
+      
       db.users.push({
         username: data.username,
         password: hashedPassword,
         color: data.color || 'bg-[#5865f2]',
         avatar: data.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png'
       });
-      fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+      
+      writeDB(db);
       socket.emit('register-response', { success: true, message: 'Başarıyla kayıt olundu! Şimdi giriş yapabilirsiniz.' });
     } catch (err) {
       socket.emit('register-response', { success: false, message: 'Kayıt sırasında hata oluştu.' });
     }
   });
 
-  const express = require('express');
-const app = express();
-const http = require('http').createServer(app);
-const io = require('socket.io')(http, {
-  cors: {
-    origin: "*", // Güvenlik ayarlarınıza göre burayı düzenleyebilirsiniz
-    methods: ["GET", "POST"]
-  }
-});
-
-// Örnek bir bellek içi (In-Memory) DB yapısı (Gerçek DB kullanıyorsan burayı eşitle)
-let dbData = {
-  textChannels: ['genel', 'muhabbet'],
-  voiceChannels: ['Genel Ses Odası'],
-  messages: {
-    'genel': [],
-    'muhabbet': []
-  }
-};
-
-// Aktif ses odalarındaki kullanıcıları tutan obje
-// Örn: { "Genel Ses Odası": [ { socketId, name, avatar }, ... ] }
-let voiceRooms = {};
-
-// Çevrimiçi kullanıcı listesi
-let onlineUsers = {}; 
-
-io.on('connection', (socket) => {
-  console.log(`🔌 Yeni bağlantı: ${socket.id}`);
-
-  // --- GİRİŞ / KAYIT LOGIC (Mevcut yapına ek olarak dbData senkronizasyonu) ---
-  socket.on('login-user', (data) => {
-    // ... Kimlik doğrulama işlemlerin ...
-    // Başarılı giriş senaryosunda:
-    onlineUsers[socket.id] = { username: data.username, avatar: data.avatar || "" };
-    
-    socket.emit('login-response', {
-      success: true,
-      user: { username: data.username, color: data.color || "bg-[#5865f2]", avatar: data.avatar || "" },
-      dbData: dbData // Güncel kanalları ve mesajları fırlatıyoruz
-    });
-
-    // Herkese güncel çevrimiçi listesini gönder
-    io.emit('update-online-users', Object.values(onlineUsers));
+  // --- KULLANICI GİRİŞİ (LOGIN) ---
+  socket.on('login-user', async (data) => {
+    try {
+      const db = readDB();
+      const user = db.users.find(u => u.username.toLowerCase() === data.username.toLowerCase());
+      if (!user) {
+        socket.emit('login-response', { success: false, message: 'Kullanıcı adı bulunamadı!' });
+        return;
+      }
+      const isMatch = await bcrypt.compare(data.password, user.password);
+      if (!isMatch) {
+        socket.emit('login-response', { success: false, message: 'Hatalı şifre!' });
+        return;
+      }
+      
+      // Kullanıcıyı çevrimiçi listesine ekle
+      activeOnlineUsers[socket.id] = { username: user.username, color: user.color, avatar: user.avatar };
+      
+      socket.emit('login-response', { 
+        success: true, 
+        user: { username: user.username, color: user.color, avatar: user.avatar },
+        dbData: { textChannels: db.textChannels, voiceChannels: db.voiceChannels, messages: db.messages }
+      });
+      
+      io.emit('update-online-users', Object.values(activeOnlineUsers));
+    } catch (err) {
+      socket.emit('login-response', { success: false, message: 'Giriş sırasında hata oluştu.' });
+    }
   });
 
   // =========================================================================
-  // 1. MESAJ DÜZENLEME (EDIT) VE SİLME (DELETE) EVENTLERİ
+  // I. MESAJ AKSİYONLARI (GÖNDERME, DÜZENLEME, SİLME)
   // =========================================================================
 
-  // Mesaj Düzenleme
-  socket.on('edit-message', ({ channel, messageId, newText }) => {
-    if (dbData.messages[channel]) {
-      const msgIndex = dbData.messages[channel].findIndex(m => m.id === messageId);
-      if (msgIndex !== -1) {
-        dbData.messages[channel][msgIndex].text = newText;
-        dbData.messages[channel][msgIndex].isEdited = true;
+  // Mesaj Gönderme (Global)
+  socket.on('send-global-message', (data) => {
+    try {
+      const db = readDB();
+      if (!db.messages[data.channel]) db.messages[data.channel] = [];
+      
+      // Avatar çökme koruması
+      if (!data.message.avatar) {
+        data.message.avatar = 'https://cdn.discordapp.com/embed/avatars/0.png';
+      }
+      
+      db.messages[data.channel].push(data.message);
+      writeDB(db);
+      
+      io.emit('receive-global-message', data);
+    } catch (err) { 
+      console.error(err); 
+    }
+  });
 
-        // Düzenlenmiş halini odadaki/kanaldaki herkese (gönderen dahil) yayınla
+  // Dosya İçerikli Mesaj Gönderme
+  socket.on('send-file-message', (data) => {
+    try {
+      const db = readDB();
+      if (!db.messages[data.channel]) db.messages[data.channel] = [];
+      
+      if (!data.message.avatar) {
+        data.message.avatar = 'https://cdn.discordapp.com/embed/avatars/0.png';
+      }
+      
+      db.messages[data.channel].push(data.message);
+      writeDB(db);
+      
+      io.emit('receive-global-message', data);
+    } catch (err) { 
+      console.error(err); 
+    }
+  });
+
+  // Mesaj Düzenleme (Edit Message)
+  socket.on('edit-message', ({ channel, messageId, newText }) => {
+    try {
+      const db = readDB();
+      if (db.messages[channel]) {
+        const msgIndex = db.messages[channel].findIndex(m => m.id === messageId);
+        if (msgIndex !== -1) {
+          db.messages[channel][msgIndex].text = newText;
+          db.messages[channel][msgIndex].isEdited = true;
+          
+          writeDB(db);
+          
+          // Güncel listeyi odadaki herkese yayınla
+          io.emit('receive-global-message', {
+            channel: channel,
+            messages: db.messages[channel]
+          });
+        }
+      }
+    } catch (err) { 
+      console.error(err); 
+    }
+  });
+
+  // Mesaj Silme (Delete Message)
+  socket.on('delete-message', ({ channel, messageId }) => {
+    try {
+      const db = readDB();
+      if (db.messages[channel]) {
+        db.messages[channel] = db.messages[channel].filter(m => m.id !== messageId);
+        
+        writeDB(db);
+        
         io.emit('receive-global-message', {
           channel: channel,
-          messages: dbData.messages[channel] // Tüm listeyi senkronize etmek en güvenli yoldur
+          messages: db.messages[channel]
         });
       }
+    } catch (err) { 
+      console.error(err); 
     }
   });
 
-  // Mesaj Silme
-  socket.on('delete-message', ({ channel, messageId }) => {
-    if (dbData.messages[channel]) {
-      dbData.messages[channel] = dbData.messages[channel].filter(m => m.id !== messageId);
-
-      // Güncellenmiş listeyi herkese fırlat
-      io.emit('receive-global-message', {
-        channel: channel,
-        messages: dbData.messages[channel]
-      });
-    }
-  });
-
-// Sunucudaki mesaj gönderme eventlerini bununla güncelle:
-socket.on('send-global-message', ({ channel, message }) => {
-  if (!dbData.messages[channel]) dbData.messages[channel] = [];
-  
-  // EĞER AVATAR GELMEDIYSE VARSAYILAN KORUMA
-  if (!message.avatar) {
-    message.avatar = "https://cdn.discordapp.com/embed/avatars/1.png";
-  }
-  
-  dbData.messages[channel].push(message);
-  io.emit('receive-global-message', { channel, message });
-});
-
-socket.on('send-file-message', ({ channel, message }) => {
-  if (!dbData.messages[channel]) dbData.messages[channel] = [];
-  
-  // EĞER AVATAR GELMEDIYSE VARSAYILAN KORUMA
-  if (!message.avatar) {
-    message.avatar = "https://cdn.discordapp.com/embed/avatars/1.png";
-  }
-  
-  dbData.messages[channel].push(message);
-  io.emit('receive-global-message', { channel, message });
-});
   // =========================================================================
-  // 2. KANAL YÖNETİMİ (OLUŞTURMA, SİLME, İSİM DEĞİŞTİRME)
+  // II. KANAL YÖNETİMİ (OLUŞTURMA, SİLME, İSİM DEĞİŞTİRME - SAĞ TIK)
   // =========================================================================
 
   // Kanal Oluşturma
   socket.on('create-global-channel', ({ name, type }) => {
-    if (type === 'text') {
-      if (!dbData.textChannels.includes(name)) {
-        dbData.textChannels.push(name);
-        dbData.messages[name] = []; // Boş mesaj kutusu aç
+    try {
+      const db = readDB();
+      if (type === 'text') {
+        if (!db.textChannels.includes(name)) {
+          db.textChannels.push(name);
+          db.messages[name] = [];
+        }
+      } else if (type === 'voice') {
+        if (!db.voiceChannels.includes(name)) {
+          db.voiceChannels.push(name);
+          activeVoiceUsers[name] = [];
+        }
       }
-    } else if (type === 'voice') {
-      if (!dbData.voiceChannels.includes(name)) {
-        dbData.voiceChannels.push(name);
-        voiceRooms[name] = []; // Boş ses odası alanı aç
-      }
+      writeDB(db);
+      io.emit('receive-global-channel', { textChannels: db.textChannels, voiceChannels: db.voiceChannels, messages: db.messages });
+    } catch (err) { 
+      console.error(err); 
     }
-    // Tüm istemcilere yeni kanal ağacını gönder
-    io.emit('receive-global-channel', dbData);
   });
 
-  // Sağ Tık: Kanal Silme
+  // Kanal Silme
   socket.on('delete-global-channel', ({ name, type }) => {
-    if (type === 'text') {
-      dbData.textChannels = dbData.textChannels.filter(ch => ch !== name);
-      delete dbData.messages[name]; // Mesaj geçmişini temizle
-    } else if (type === 'voice') {
-      dbData.voiceChannels = dbData.voiceChannels.filter(vc => vc !== name);
-      delete voiceRooms[name]; // Odadaki aktif kullanıcı listesini sil
+    try {
+      const db = readDB();
+      if (type === 'text') {
+        db.textChannels = db.textChannels.filter(ch => ch !== name);
+        delete db.messages[name];
+      } else if (type === 'voice') {
+        db.voiceChannels = db.voiceChannels.filter(vc => vc !== name);
+        delete activeVoiceUsers[name];
+      }
+      writeDB(db);
+      
+      io.emit('receive-global-channel', { textChannels: db.textChannels, voiceChannels: db.voiceChannels, messages: db.messages });
+      io.emit('update-voice-users', activeVoiceUsers);
+    } catch (err) { 
+      console.error(err); 
     }
-    io.emit('receive-global-channel', dbData);
-    io.emit('update-voice-users', voiceRooms); // Ses odası listesini güncelle
   });
 
-  // Sağ Tık: Kanal İsmi Değiştirme (Rename)
+  // Kanal İsmini Değiştirme (Rename)
   socket.on('rename-global-channel', ({ oldName, newName, type }) => {
-    if (type === 'text') {
-      const idx = dbData.textChannels.indexOf(oldName);
-      if (idx !== -1) {
-        dbData.textChannels[idx] = newName;
-        // Mesaj geçmişini yeni isme aktar
-        dbData.messages[newName] = dbData.messages[oldName] || [];
-        delete dbData.messages[oldName];
+    try {
+      const db = readDB();
+      if (type === 'text') {
+        const idx = db.textChannels.indexOf(oldName);
+        if (idx !== -1) {
+          db.textChannels[idx] = newName;
+          db.messages[newName] = db.messages[oldName] || [];
+          delete db.messages[oldName];
+        }
+      } else if (type === 'voice') {
+        const idx = db.voiceChannels.indexOf(oldName);
+        if (idx !== -1) {
+          db.voiceChannels[idx] = newName;
+          activeVoiceUsers[newName] = activeVoiceUsers[oldName] || [];
+          delete activeVoiceUsers[oldName];
+        }
       }
-    } else if (type === 'voice') {
-      const idx = dbData.voiceChannels.indexOf(oldName);
-      if (idx !== -1) {
-        dbData.voiceChannels[idx] = newName;
-        // Odadaki kullanıcıları yeni isme taşı
-        voiceRooms[newName] = voiceRooms[oldName] || [];
-        delete voiceRooms[oldName];
-      }
+      writeDB(db);
+      
+      io.emit('receive-global-channel', { textChannels: db.textChannels, voiceChannels: db.voiceChannels, messages: db.messages });
+      io.emit('update-voice-users', activeVoiceUsers);
+    } catch (err) { 
+      console.error(err); 
     }
-    io.emit('receive-global-channel', dbData);
-    io.emit('update-voice-users', voiceRooms);
   });
 
-
   // =========================================================================
-  // 3. PROFİL FOTOĞRAFI GÜNCELLEME (BASE64 DOSYA ALIMI)
+  // III. PROFİL GÜNCELLEME (DOSYA / BASE64 ALIMI)
   // =========================================================================
-  
-  // Client tarafında iki farklı emit senaryosunu da desteklemiştik, ikisini de karşılıyoruz:
-  const handleAvatarUpdate = (socket, username, avatarData) => {
-    // 1. Bellekteki kullanıcı verisini güncelle
-    if (onlineUsers[socket.id]) {
-      onlineUsers[socket.id].avatar = avatarData;
+  const handleAvatarUpdate = (username, avatarData) => {
+    try {
+      const db = readDB();
+      const userIndex = db.users.findIndex(u => u.username.toLowerCase() === username.toLowerCase());
+      if (userIndex !== -1) {
+        db.users[userIndex].avatar = avatarData;
+        writeDB(db);
+        
+        if (activeOnlineUsers[socket.id]) {
+          activeOnlineUsers[socket.id].avatar = avatarData;
+        }
+        
+        socket.emit('profile-updated', { success: true, avatar: avatarData });
+        socket.emit('avatar-update-response', { success: true, avatar: avatarData });
+        io.emit('update-online-users', Object.values(activeOnlineUsers));
+      }
+    } catch (err) {
+      console.error(err);
     }
-    
-    // 2. Eğer bir DB kullanıyorsan buraya `User.updateOne({ username }, { avatar: avatarData })` yazmalısın.
-    
-    // İstekte bulunan kullanıcıya onay dön
-    socket.emit('avatar-update-response', { success: true, avatar: avatarData });
-    socket.emit('profile-updated', { success: true, avatar: avatarData });
-    
-    // Çevrimiçi listesindeki avatarı güncelle ve herkese duyur
-    io.emit('update-online-users', Object.values(onlineUsers));
   };
 
   socket.on('update-profile-avatar', ({ username, avatar }) => {
-    handleAvatarUpdate(socket, username, avatar);
+    handleAvatarUpdate(username, avatar);
   });
 
   socket.on('avatar-update-request', ({ username, newAvatar }) => {
-    handleAvatarUpdate(socket, username, newAvatar);
+    handleAvatarUpdate(username, newAvatar);
   });
 
-
   // =========================================================================
-  // 4. WEBRTC SES ODASI & SİNYALİZASYON SİSTEMİ
+  // IV. WEBRTC SES ODASI SİNYALİZASYONU
   // =========================================================================
-  
   socket.on('join-voice-network', ({ room, user, avatar }) => {
-    // Kullanıcı zaten başka bir odadaysa önce oradan çıkartalım
-    Object.keys(voiceRooms).forEach(r => {
-      voiceRooms[r] = voiceRooms[r].filter(u => u.socketId !== socket.id);
+    // Önce varsa eski odasından temizle
+    Object.keys(activeVoiceUsers).forEach(r => {
+      activeVoiceUsers[r] = activeVoiceUsers[r].filter(u => u.socketId !== socket.id);
     });
 
-    if (!voiceRooms[room]) voiceRooms[room] = [];
+    if (!activeVoiceUsers[room]) activeVoiceUsers[room] = [];
     
-    const userData = { socketId: socket.id, name: user, avatar: avatar };
-    voiceRooms[room].push(userData);
-
+    activeVoiceUsers[room].push({ socketId: socket.id, name: user, avatar: avatar || 'https://cdn.discordapp.com/embed/avatars/0.png' });
     socket.join(room);
     
-    // Odadaki diğer kullanıcılara "Yeni biri geldi, WebRTC bağlantısını başlatın" emri ver
     socket.to(room).emit('user-connected', { socketId: socket.id, user: user });
-    
-    // Herkese güncel odadaki kullanıcı listelerini fırlat
-    io.emit('update-voice-users', voiceRooms);
+    io.emit('update-voice-users', activeVoiceUsers);
   });
 
   socket.on('leave-voice-network', ({ room }) => {
-    if (voiceRooms[room]) {
-      voiceRooms[room] = voiceRooms[room].filter(u => u.socketId !== socket.id);
+    if (activeVoiceUsers[room]) {
+      activeVoiceUsers[room] = activeVoiceUsers[room].filter(u => u.socketId !== socket.id);
       socket.leave(room);
       socket.to(room).emit('user-left-voice', { socketId: socket.id });
     }
-    io.emit('update-voice-users', voiceRooms);
+    io.emit('update-voice-users', activeVoiceUsers);
   });
 
-  // WebRTC Eşler Arası Sinyal Taşıyıcıları (Mesh Network için)
   socket.on('webrtc-offer', ({ targetId, offer }) => {
     io.to(targetId).emit('webrtc-offer', { senderId: socket.id, offer });
   });
@@ -329,114 +378,49 @@ socket.on('send-file-message', ({ channel, message }) => {
     io.to(targetId).emit('webrtc-candidate', { senderId: socket.id, candidate });
   });
 
-
-  // --- BAĞLANTI KOPMA DURUMU ---
+  // --- KOPMA (DISCONNECT) DURUMU ---
   socket.on('disconnect', () => {
-    // Ses odalarından temizle
-    Object.keys(voiceRooms).forEach(room => {
-      const userInRoom = voiceRooms[room].find(u => u.socketId === socket.id);
+    // Ses odasından temizle
+    Object.keys(activeVoiceUsers).forEach(room => {
+      const userInRoom = activeVoiceUsers[room].find(u => u.socketId === socket.id);
       if (userInRoom) {
-        voiceRooms[room] = voiceRooms[room].filter(u => u.socketId !== socket.id);
+        activeVoiceUsers[room] = activeVoiceUsers[room].filter(u => u.socketId !== socket.id);
         socket.to(room).emit('user-left-voice', { socketId: socket.id });
       }
     });
-    io.emit('update-voice-users', voiceRooms);
+    io.emit('update-voice-users', activeVoiceUsers);
 
     // Çevrimiçi listesinden temizle
-    delete onlineUsers[socket.id];
-    io.emit('update-online-users', Object.values(onlineUsers));
-
-    console.log(`❌ Bağlantı kesildi: ${socket.id}`);
-  });
-});
-
-const PORT = process.env.PORT || 3001;
-http.listen(PORT, () => {
-  console.log(`🚀 Sunucu ${PORT} portunda başarıyla ayağa kalktı.`);
-});
-
-  socket.on('login-user', async (data) => {
-    try {
-      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-      const user = db.users.find(u => u.username.toLowerCase() === data.username.toLowerCase());
-      if (!user) {
-        socket.emit('login-response', { success: false, message: 'Kullanıcı adı bulunamadı!' });
-        return;
-      }
-      const isMatch = await bcrypt.compare(data.password, user.password);
-      if (!isMatch) {
-        socket.emit('login-response', { success: false, message: 'Hatalı şifre!' });
-        return;
-      }
-      activeOnlineUsers[socket.id] = { username: user.username, color: user.color, avatar: user.avatar };
-      socket.emit('login-response', { 
-        success: true, 
-        user: { username: user.username, color: user.color, avatar: user.avatar },
-        dbData: { textChannels: db.textChannels, voiceChannels: db.voiceChannels, messages: db.messages }
-      });
-      io.emit('update-online-users', Object.values(activeOnlineUsers));
-    } catch (err) {
-      socket.emit('login-response', { success: false, message: 'Giriş sırasında hata oluştu.' });
-    }
-  });
-
-  socket.on('update-profile-avatar', (data) => {
-    try {
-      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-      const userIndex = db.users.findIndex(u => u.username.toLowerCase() === data.username.toLowerCase());
-      if (userIndex !== -1) {
-        db.users[userIndex].avatar = data.avatar;
-        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-        
-        if (activeOnlineUsers[socket.id]) {
-          activeOnlineUsers[socket.id].avatar = data.avatar;
-        }
-        
-        socket.emit('profile-updated', { success: true, avatar: data.avatar });
-        io.emit('update-online-users', Object.values(activeOnlineUsers));
-      } else {
-        socket.emit('profile-updated', { success: false, message: 'Kullanıcı bulunamadı.' });
-      }
-    } catch (err) {
-      socket.emit('profile-updated', { success: false, message: 'Profil güncellenirken sunucu hatası.' });
-    }
-  });
-
-  socket.on('send-global-message', (data) => {
-    try {
-      const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-      if (!db.messages[data.channel]) db.messages[data.channel] = [];
-      db.messages[data.channel].push(data.message);
-      fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-      io.emit('receive-global-message', data);
-    } catch (err) { console.error(err); }
-  });
-
-  socket.on('disconnect', () => {
     if (activeOnlineUsers[socket.id]) {
       delete activeOnlineUsers[socket.id];
       io.emit('update-online-users', Object.values(activeOnlineUsers)); 
     }
+    console.log(`❌ Bağlantı kesildi: ${socket.id}`);
   });
 });
 
+// 7. Sunucuyu Dinlemeye Başla
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`Sunucu ${PORT} portunda başarıyla çalışıyor.`);
+  console.log(`🚀 Sunucu ${PORT} portunda başarıyla çalışıyor.`);
 });
 
+// 8. Electron Masaüstü Pencere Yönetimi (Yerel Çalışma Modu için)
 if (!isRender && app) {
   function createWindow() {
-      const win = new BrowserWindow({
-        width: 1200,
-        height: 800,
-        title: "Ria Discord (Desktop)",
-        webPreferences: { nodeIntegration: true, contextIsolation: false },
-      });
-      win.loadURL('http://localhost:5173').catch(() => {
-          win.loadURL('https://fakecord-bdtp.onrender.com');
-      });
+    const win = new BrowserWindow({
+      width: 1200,
+      height: 800,
+      title: "Ria Discord (Desktop)",
+      webPreferences: { nodeIntegration: true, contextIsolation: false },
+    });
+    win.loadURL('http://localhost:5173').catch(() => {
+      win.loadURL('https://fakecord-bdtp.onrender.com');
+    });
   }
-  if (app.isReady()) { createWindow(); } 
-  else { app.whenReady().then(createWindow); }
+  if (app.isReady()) { 
+    createWindow(); 
+  } else { 
+    app.whenReady().then(createWindow); 
+  }
 }
